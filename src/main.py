@@ -60,6 +60,7 @@ def get_points(images, transformations):
     diff = np.concatenate(([np.inf], diff, [np.inf]))
     new_mask = np.minimum(diff[1:], diff[:-1]) < 0.1
     points_3d = points_3d[new_mask]
+    visualize(images, points_3d, pts, np.linalg.inv(G)[:, :3])
     return points_3d
 
 def smooth_chord(points, idx):

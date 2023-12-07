@@ -44,21 +44,37 @@ def match_candidates(x, depths_1, depths_2):
     err = [c1[..., None] - c2[..., None, :] for c1, c2 in zip(depths_1, depths_2)]
     assert len(err) == len(x)
 
-    accept = [np.argmin(np.abs(er)) if er.size > 0 else -1 for er in err]
-    idx = [np.unravel_index(acc, er.shape) if acc >= 0 else -1 for acc, er in zip(accept, err)]
     depths = []
-    for i in range(len(x)):
-        if idx[i] != -1:
-            d1 = depths_1[i][idx[i][0]]
-            d2 = depths_2[i][idx[i][1]]
-            if np.abs(d2 - d1) < 0.04:
-                depths.append(0.5 * (d1 + d2))
-            else:
-                depths.append(-2)
-                print('error too large')
-        else:
+    last_point = None
+    for i, er in enumerate(err):
+        if er.size == 0:
+            last_point = None
             depths.append(-1)
             print('no matches found')
+            continue
+        penalty = None
+        if last_point is not None:
+            new_pts_1 = x[i, None] * depths_1[i][..., None]
+            new_pts_2 = x[i, None] * depths_2[i][..., None]
+            diff_1 = np.linalg.norm(new_pts_1 - last_point[None], axis=-1) ** 2
+            diff_2 = np.linalg.norm(new_pts_2 - last_point[None], axis=-1) ** 2
+            penalty = diff_1[..., None] + diff_2[..., None, :]
+            print("applying penalty: ", penalty)
+            assert penalty.shape == er.shape, penalty.shape
+            er = er + 2 * penalty
+        acc = np.argmin(np.abs(er))
+        idx = np.unravel_index(acc, er.shape)
+        d1 = depths_1[i][idx[0]]
+        d2 = depths_2[i][idx[1]]
+        if np.abs(d2 - d1) < 0.03:
+            d = 0.5 * (d1 + d2)
+            depths.append(d)
+            if penalty is None or penalty[idx[0], idx[1]] < 0.02:
+                last_point = x[i] * d
+        else:
+            last_point = None
+            depths.append(-2)
+            print('error too large')
     depths = np.array(depths)
 
     return depths, depths >= 0
@@ -102,13 +118,12 @@ def points_on_epipolar(epipolar):
         return np.array([(b - c) / a, -1]), np.array([(-b - c) / a, 1])
     return np.array([-1, (a - c) / b]), np.array([1, (-a - c) / b])
 
-def visualize_epipolar(epipolar_lines, x_1, x_2, x_3, off, images):
+def visualize_epipolar(epipolar_lines, x_1, x_2, x_3, off, images=None):
     fig, axs = plt.subplots(2, 2, sharex=True, sharey=True)
     axs[1, 0].plot(*x_1[..., :2].T, color='red')
     axs[1, 1].plot(*x_2[..., :2].T, color='red')
     axs[0, 0].plot(*x_3[..., :2].T, color='red')
-    TEST_PT = 26
-    scatter_0 = axs[1, 0].scatter(*x_1[TEST_PT, :2], color='blue')
+    scatter_0 = axs[1, 0].scatter(*x_1[0, :2], color='blue')
     # scatter_1 = axs[1, 1].scatter(*intersections_1[n1==0][..., :2].T, color='blue')
     # scatter_2 = axs[0, 0].scatter(*intersections_2[n2==0][..., :2].T, color='blue')
     scatter_1 = axs[1, 1].scatter(*x_2[:, :2].T, s=3, color='blue')
@@ -124,11 +139,11 @@ def visualize_epipolar(epipolar_lines, x_1, x_2, x_3, off, images):
     # breakpoint()
     # axs[1, 1].scatter(*points, s=4, color='red')
     
-    p1, p2 = points_on_epipolar(epipolar_lines[0][TEST_PT])
+    p1, p2 = points_on_epipolar(epipolar_lines[0][0])
     ax1 = axs[1, 1].plot(*zip(p1, p2), color='green')
     # ax1 = axs[1, 1].plot(*coords.T, color='green')
 
-    p1, p2 = points_on_epipolar(epipolar_lines[1][TEST_PT])
+    p1, p2 = points_on_epipolar(epipolar_lines[1][0])
     ax2 = axs[0, 0].plot(*zip(p1, p2), color='green')
     # ax2 = axs[0, 0].plot(*coords.T, color='green')
 
@@ -138,9 +153,10 @@ def visualize_epipolar(epipolar_lines, x_1, x_2, x_3, off, images):
     extents = corners[:2].flatten()
     axs[0, 0].set_xlim(extents[:2])
     axs[0, 0].set_ylim(extents[2:])
-    axs[0, 0].imshow(images[2][::-1, ::-1], extent=extents)
-    axs[1, 0].imshow(images[0][::-1, ::-1], extent=extents)
-    axs[1, 1].imshow(images[1][::-1, ::-1], extent=extents)
+    if images:
+        axs[0, 0].imshow(images[2][::-1, ::-1], extent=extents)
+        axs[1, 0].imshow(images[0][::-1, ::-1], extent=extents)
+        axs[1, 1].imshow(images[1][::-1, ::-1], extent=extents)
     
     def animate(i):
         scatter_0.set_offsets(x_1[i, :2])
@@ -187,6 +203,8 @@ def reconstruct_full(x, x_prime, rot, pos, essential):
             d_list[idx].append(d[j])
         d_list = [np.array(lst) for lst in d_list]
         depths.append(d_list)
+
+    visualize_epipolar(epipolar, x, *x_prime, offsets)
 
     selected_depths, mask = match_candidates(x, *depths)
     return x * selected_depths[..., None], mask
